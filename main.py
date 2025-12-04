@@ -1,230 +1,84 @@
-import asyncio
-import json
+#!/usr/bin/env python3
+"""
+WTF - What's The F***ing command?
+A simple CLI tool to generate shell commands from natural language.
+"""
+
 import os
+import sys
+import json
 import platform
+import argparse
 from pathlib import Path
-
-import pyperclip
 from google import genai
-from textual.app import App, ComposeResult
-from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import Header, Footer, Input, Static, RichLog, Markdown
+import pyperclip
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.syntax import Syntax
+
+console = Console()
 
 
-class WTF(App):
-    CSS = """
-    Screen {
-        align: center middle;
-    }
+def get_env_file_path() -> Path:
+    """Get the path to the .env file in the user's home directory"""
+    config_dir = Path.home() / ".wtf"
+    config_dir.mkdir(exist_ok=True)
+    return config_dir / ".env"
 
-    #main-container {
-        width: 80%;
-        height: auto;
-        border: solid green;
-        padding: 1 2;
-    }
 
-    #question {
-        width: 100%;
-        margin-bottom: 1;
-    }
-
-    #answer {
-        width: 100%;
-        height: auto;
-        min-height: 3;
-        border: solid blue;
-        padding: 1;
-    }
-
-    #explanation {
-        width: 100%;
-        height: auto;
-        max-height: 20;
-        border: solid yellow;
-        padding: 1;
-        display: none;
-        margin-top: 1;
-        overflow-y: auto;
-    }
-
-    #output {
-        width: 100%;
-        height: 10;
-        border: solid cyan;
-        display: none;
-        margin-top: 1;
-    }
-
-    #help-text {
-        width: 100%;
-        color: #00ff00;
-        text-align: center;
-        margin-top: 1;
-        background: #1a1a1a;
-        padding: 1;
-    }
-
-    .loading {
-        color: yellow;
-    }
-
-    .error {
-        color: red;
-    }
-
-    .success {
-        color: green;
-    }
-    """
-
-    BINDINGS = [
-        Binding("e", "explain_command", "Explain", show=True),
-        Binding("escape", "unfocus_input", "Unfocus", show=False),
-        Binding("q", "quit", "Quit", show=True),
-    ]
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Container(id="main-container"):
-            yield Static("What command do you need?", classes="label")
-            yield Input(placeholder="> show pods that crashed in the last 30 minutes in prod", id="question")
-            yield Static("", id="answer")
-            yield Markdown("", id="explanation")
-            yield RichLog(id="output", wrap=True, highlight=True)
-            yield Static("💡 [Enter] Generate Command | [ESC] Unfocus | [e] Explain | [q] Quit", id="help-text",
-                         markup=False)
-        yield Footer()
-
-    @staticmethod
-    def _get_env_file_path() -> Path:
-        """Get the path to the .env file in the script's directory"""
-        script_dir = Path(__file__).parent
-        return script_dir / ".env"
-
-    def _load_api_key_from_env_file(self) -> str | None:
-        """Load API key from .env file if it exists"""
-        env_file = self._get_env_file_path()
-        if env_file.exists():
-            try:
-                with open(env_file, 'r') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith('GEMINI_API_KEY='):
-                            return line.split('=', 1)[1].strip('"\'')
-            except Exception:
-                pass
-        return None
-
-    def _save_api_key_to_env_file(self, api_key: str) -> None:
-        """Save API key to .env file"""
-        env_file = self._get_env_file_path()
+def load_api_key_from_env_file() -> str | None:
+    """Load API key from .env file if it exists"""
+    env_file = get_env_file_path()
+    if env_file.exists():
         try:
-            with open(env_file, 'w') as f:
-                f.write(f'GEMINI_API_KEY={api_key}\n')
-        except Exception as e:
-            self.notify(f"⚠️  Could not save API key: {str(e)}", severity="warning")
+            with open(env_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('GEMINI_API_KEY='):
+                        return line.split('=', 1)[1].strip('"\'')
+        except Exception:
+            pass
+    return None
 
-    def on_mount(self) -> None:
-        # Try to get API key from environment first, then from .env file
-        api_key = os.environ.get("GEMINI_API_KEY") or self._load_api_key_from_env_file()
+
+def save_api_key_to_env_file(api_key: str) -> None:
+    """Save API key to .env file"""
+    env_file = get_env_file_path()
+    try:
+        with open(env_file, 'w') as f:
+            f.write(f'GEMINI_API_KEY={api_key}\n')
+        console.print(f"✓ API key saved to {env_file}", style="green")
+    except Exception as e:
+        console.print(f"⚠️  Could not save API key: {str(e)}", style="yellow")
+
+
+def get_api_key() -> str:
+    """Get API key from environment or .env file, or prompt user"""
+    api_key = os.environ.get("GEMINI_API_KEY") or load_api_key_from_env_file()
+
+    if not api_key:
+        console.print("\n⚠️  No API key found.", style="yellow")
+        console.print("Please get your API key from: https://aistudio.google.com/apikey\n")
+        api_key = console.input("[cyan]Enter your Gemini API key:[/cyan] ").strip()
 
         if not api_key:
-            answer_widget = self.query_one("#answer")
-            answer_widget.update("⚠️  No API key found. Please enter your Gemini API key below.")
-            answer_widget.add_class("error")
+            console.print("❌ No API key provided. Exiting.", style="red")
+            sys.exit(1)
 
-            # Focus the input and set a flag to indicate we're waiting for API key
-            input_widget = self.query_one("#question", Input)
-            input_widget.placeholder = "Paste your Gemini API key here and press Enter"
-            input_widget.focus()
-            self.waiting_for_api_key = True
-            self.client = None
-            return
+        save_api_key_to_env_file(api_key)
 
-        self.waiting_for_api_key = False
-        try:
-            self.client = genai.Client(api_key=api_key)
-            self.model_name = "gemini-2.5-flash"
-            self.current_response = None
-            self.last_query = None
-        except Exception as e:
-            answer_widget = self.query_one("#answer")
-            answer_widget.update(f"❌ Error initializing Gemini: {str(e)}")
-            answer_widget.add_class("error")
+    return api_key
 
-    async def on_input_submitted(self, message: Input.Submitted) -> None:
-        """Handle Enter to generate command or save API key"""
-        query = message.value
-        if not query:
-            return
 
-        # If we're waiting for API key, process it
-        if hasattr(self, 'waiting_for_api_key') and self.waiting_for_api_key:
-            await self._setup_api_key(query)
-            return
+def generate_command(query: str, show_explanation: bool = False) -> None:
+    """Generate command from natural language query"""
 
-        await self.generate_command(query)
+    api_key = get_api_key()
 
-    async def _setup_api_key(self, api_key: str) -> None:
-        """Setup and validate the API key"""
-        answer_widget = self.query_one("#answer")
-        input_widget = self.query_one("#question", Input)
-
-        answer_widget.update("🔑 Validating API key...")
-        answer_widget.remove_class("error")
-        answer_widget.add_class("loading")
-
-        try:
-            # Try to initialize the client with the provided API key
-            self.client = genai.Client(api_key=api_key)
-            self.model_name = "gemini-2.5-flash"
-            self.current_response = None
-            self.last_query = None
-
-            # Save the API key to .env file
-            self._save_api_key_to_env_file(api_key)
-
-            answer_widget.update("✓ API key saved successfully! You can now enter your commands.")
-            answer_widget.remove_class("loading")
-            answer_widget.add_class("success")
-
-            # Reset the input placeholder
-            input_widget.value = ""
-            input_widget.placeholder = "> show pods that crashed in the last 30 minutes in prod"
-            self.waiting_for_api_key = False
-
-            self.notify("✓ API key configured successfully!", severity="information")
-
-        except Exception as e:
-            answer_widget.update(f"❌ Invalid API key: {str(e)}\nPlease try again.")
-            answer_widget.remove_class("loading")
-            answer_widget.add_class("error")
-            input_widget.value = ""
-
-    def action_unfocus_input(self) -> None:
-        """Unfocus the input field when ESC is pressed"""
-        input_widget = self.query_one("#question", Input)
-        input_widget.blur()
-
-    async def generate_command(self, query: str) -> None:
-        """Generate command from natural language query"""
-        # Check if client is initialized
-        if not hasattr(self, 'client') or self.client is None:
-            self.notify("❌ Gemini client not initialized. Check your API key.", severity="error")
-            return
-
-        answer_widget = self.query_one("#answer")
-        explanation_widget = self.query_one("#explanation", Markdown)
-        output_widget = self.query_one("#output")
-
-        answer_widget.update("🤔 Thinking...")
-        answer_widget.add_class("loading")
-        answer_widget.remove_class("error")
-        answer_widget.remove_class("success")
-        explanation_widget.display = False
-        output_widget.display = False
+    try:
+        client = genai.Client(api_key=api_key)
+        model_name = "gemini-2.5-flash"
 
         os_name = platform.system()
         shell_name = "PowerShell" if os_name == "Windows" else "Bash"
@@ -243,78 +97,92 @@ User Query: {query}
 
 Output ONLY valid JSON, no markdown formatting."""
 
-        try:
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=prompt
-            )
-            text = response.text.strip()
+        console.print("🤔 Thinking...", style="yellow")
 
-            # Clean up Markdown formatting if present
-            if text.startswith("```json"):
-                text = text[7:]
-            elif text.startswith("```"):
-                text = text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt
+        )
 
-            text = text.strip()
+        text = response.text.strip()
 
-            data = json.loads(text)
+        # Clean up Markdown formatting if present
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
 
-            if "command" not in data or "explanation" not in data or "detailed_explanation" not in data:
-                raise ValueError("Response missing required fields")
+        text = text.strip()
 
-            self.current_response = data
-            self.last_query = query
+        data = json.loads(text)
 
-            answer_widget.update(f"✓ {data['command']}")
-            answer_widget.remove_class("loading")
-            answer_widget.add_class("success")
+        if "command" not in data or "explanation" not in data or "detailed_explanation" not in data:
+            raise ValueError("Response missing required fields")
 
-            # Automatically copy to clipboard
-            pyperclip.copy(data['command'])
-            self.notify("✓ Command generated and copied to clipboard!", severity="information")
+        console.print("\r" + " " * 20 + "\r", end="")
 
-        except json.JSONDecodeError as e:
-            answer_widget.update(f"❌ Error parsing response: {str(e)}\nRaw response: {text[:200]}")
-            answer_widget.remove_class("loading")
-            answer_widget.add_class("error")
-        except Exception as e:
-            answer_widget.update(f"❌ Error: {str(e)}")
-            answer_widget.remove_class("loading")
-            answer_widget.add_class("error")
+        command = data['command']
+        pyperclip.copy(command)
+        shell_lang = "powershell" if os_name == "Windows" else "bash"
 
-    async def action_explain_command(self) -> None:
-        """Show detailed explanation with loading animation"""
-        explanation_widget = self.query_one("#explanation", Markdown)
+        syntax = Syntax(command, shell_lang, theme="monokai", line_numbers=False)
+        console.print(Panel(syntax, title="[bold green]Command[/bold green]", border_style="green"))
+        console.print(f"\n[dim]Command copied to clipboard[/dim]\n")
 
-        # Toggle if already showing
-        if explanation_widget.display:
-            explanation_widget.display = False
-            return
+        # console.print(f"\n[dim]{data['explanation']}[/dim]\n")
 
-        if not self.current_response or "detailed_explanation" not in self.current_response:
-            self.notify("⚠️  No command to explain.", severity="warning")
-            return
+        if show_explanation:
+            md = Markdown(data['detailed_explanation'])
+            console.print(Panel(md, title="[bold cyan]Detailed Explanation[/bold cyan]", border_style="cyan"))
 
-        # Show loading animation for ~1 second
-        explanation_widget.display = True
-        loading_frames = [
-            "🤔 Thinking",
-            "🧠 Processing",
-            "⚙️ Working",
-            "✨ Almost there..."
-        ]
+    except json.JSONDecodeError as e:
+        console.print(f"❌ Error parsing response: {str(e)}", style="red")
+        console.print(f"Raw response: {text[:200]}", style="dim")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"❌ Error: {str(e)}", style="red")
+        sys.exit(1)
 
-        for i in range(4):  # 4 frames * 0.25s = 1 second
-            await explanation_widget.update(loading_frames[i % len(loading_frames)])
-            await asyncio.sleep(0.25)
 
-        # Show the detailed explanation with markdown rendering
-        detailed = self.current_response["detailed_explanation"]
-        await explanation_widget.update(f"# 📖 Detailed Explanation\n\n{detailed}")
+def main():
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description="WTF - Generate shell commands from natural language",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  wtf "list files larger than 1024kb"
+  wtf "find all python files modified in the last 7 days" -e
+  wtf "kill process on port 3000" --explain
+        """
+    )
+
+    parser.add_argument(
+        "query",
+        nargs="+",
+        help="Natural language description of the command you need"
+    )
+
+    parser.add_argument(
+        "-e", "--explain",
+        action="store_true",
+        help="Show detailed explanation of the command"
+    )
+
+    args = parser.parse_args()
+
+    # Join query parts into a single string
+    query = " ".join(args.query)
+
+    if not query.strip():
+        console.print("❌ Please provide a query", style="red")
+        parser.print_help()
+        sys.exit(1)
+
+    generate_command(query, show_explanation=args.explain)
 
 
 if __name__ == "__main__":
-    WTF().run()
+    main()

@@ -8,8 +8,6 @@ A terminal-based UI tool that converts natural language queries into executable 
 - 🖥️ **OS-Aware**: Automatically generates commands for your operating system (Windows PowerShell or Linux Bash)
 - 📋 **Copy to Clipboard**: One-key command copying
 - 💡 **Explanations**: Toggle detailed explanations of what each command does
-- ⚡ **Fast & Responsive**: Async API calls keep the UI snappy
-- 🎨 **Clean TUI**: Beautiful terminal interface built with Textual
 
 ## Installation
 
@@ -45,22 +43,14 @@ Type your query in natural language and press Enter. For example:
 - "find files larger than 100MB"
 - "show git commits from last week"
 
-### Key Bindings
-
-- **Enter**: Submit your query
-- **c**: Copy the generated command to clipboard
-- **e**: Toggle explanation view
-- **q**: Quit the application
-
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Gemini API key (get one at [Google AI Studio](https://makersuite.google.com/app/apikey))
 
 ## Dependencies
 
-- `textual`: Terminal UI framework
-- `google-generativeai`: Gemini API client
+- `google-genai`: Gemini API client
 - `pyperclip`: Clipboard functionality
 
 ## How It Works
@@ -68,8 +58,7 @@ Type your query in natural language and press Enter. For example:
 1. You type a natural language query
 2. The app detects your OS and shell
 3. Gemini 2.5 Flash generates the appropriate command
-4. The command is displayed with an optional explanation
-5. Copy and run it with a single keypress
+4. The command is displayed and copied with an optional explanation
 
 ## License
 
